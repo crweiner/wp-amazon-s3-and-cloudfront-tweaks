@@ -4,7 +4,7 @@ Plugin Name: WP Offload S3 Tweaks
 Plugin URI: http://github.com/deliciousbrains/wp-amazon-s3-and-cloudfront-tweaks
 Description: Examples of using WP Offload S3's filters
 Author: Delicious Brains
-Version: 0.1.2
+Version: 0.1.3
 Author URI: http://deliciousbrains.com
 */
 // Copyright (c) 2015 Delicious Brains. All rights reserved.
@@ -30,7 +30,6 @@ class Amazon_S3_and_CloudFront_Tweaks {
 		//add_filter( 'as3cf_upload_acl', array( $this, 'upload_acl' ), 10, 3 );
 		//add_filter( 'as3cf_upload_acl_sizes', array( $this, 'upload_acl_sizes' ), 10, 4 );
 		//add_filter( 'as3cf_object_meta', array( $this, 'object_meta' ), 10, 4 );
-		//add_filter( 'as3cf_hidpi_suffix', array( $this, 'hidpi_suffix' ), 10, 1 );
 		//add_filter( 'as3cf_get_object_version_string', array( $this, 'get_object_version_string' ), 10, 1 );
 		//add_filter( 'as3cf_wp_get_attachment_url', array( $this, 'wp_get_attachment_url' ), 10, 2 );
 		//add_filter( 'as3cf_use_ssl', array( $this, 'use_ssl' ), 10, 1 );
@@ -44,13 +43,17 @@ class Amazon_S3_and_CloudFront_Tweaks {
 		//add_filter( 'aws_get_client_args', array( $this, 'aws_client_args' ), 10, 1 );
 		//add_filter( 'as3cf_expires', array( $this, 'default_expires' ), 10, 1 );
 		//add_filter( 'as3cfpro_media_actions_capability', array( $this, 'media_actions_capability' ), 10, 1 );
+		//add_filter( 'as3cf_local_domains', array( $this, 'local_domains' ), 10, 1 );
 
 		// Assets Addon https://deliciousbrains.com/wp-offload-s3/doc/assets-addon/
 		//add_filter( 'as3cf_assets_locations_in_scope_to_scan', array( $this, 'assets_locations' ) );
 		//add_filter( 'as3cf_assets_ignore_file', array( $this, 'assets_ignore_file' ), 10, 3 );
 		//add_filter( 'as3cf_minify_exclude_files', array( $this, 'assets_minify_exclude' ) );
 		//add_filter( 'as3cf_gzip_mime_types', array( $this, 'assets_gzip_mimes' ), 10, 2 );
-		//add_filter( 'as3cf_assets_expires', array( $this, 'assets_default_expires' ), 10, 1 );
+		//add_filter( 'as3cf_assets_expires', array( $this, 'default_assets_expires' ), 10, 1 );
+
+		// Assets Pull Addon https://deliciousbrains.com/wp-offload-s3/doc/assets-pull-addon/
+		//add_filter( 'as3cf_assets_pull_test_endpoint_sslverify', array( $this, 'assets_pull_test_endpoint_sslverify' ), 10, 2 );
 	}
 
 	/**
@@ -132,20 +135,6 @@ class Amazon_S3_and_CloudFront_Tweaks {
 		}
 
 		return $acl;
-	}
-
-	/**
-	 * This filter allows you to change the file suffix used to denote HiDPI files
-	 * when using a specific HiDPI plugin
-	 *
-	 * @param string $suffix defaults to '@2x'
-	 *
-	 * @return string
-	 */
-	function hidpi_suffix( $suffix ) {
-		$suffix = '-2x';
-
-		return $suffix;
 	}
 
 	/**
@@ -264,17 +253,16 @@ class Amazon_S3_and_CloudFront_Tweaks {
 	 * This filter allows you to add or remove paths of files that will be uploaded
 	 * to S3. This can be used to upload associated images to an attachment used by a plugin.
 	 *
-	 * @param string $paths
-	 * @param int    $attachment_id
-	 * @param array  $meta
+	 * @param array $paths
+	 * @param int   $attachment_id
+	 * @param array $meta
 	 *
 	 * @return array
 	 */
 	function attachment_file_paths( $paths, $attachment_id, $meta ) {
-		global $as3cf;
-
 		foreach ( $paths as $file ) {
-			$extra_file = $as3cf->apply_file_suffix( $file, '-plugin-copy' );
+			$pathinfo   = pathinfo( $file );
+			$extra_file = $pathinfo['dirname'] . '/' . $pathinfo['filename'] . '-backup-copy.' . $pathinfo['extension'];
 			if ( file_exists( $extra_file ) ) {
 				$paths[] = $extra_file;
 			}
@@ -292,6 +280,24 @@ class Amazon_S3_and_CloudFront_Tweaks {
 	 */
 	function show_deprecated_domain_setting( $show ) {
 		return true;
+	}
+
+	/**
+	 * This filter allows you to control the files that are being removed from the server
+	 * after upload to S3.
+	 *
+	 * @param array  $files_to_remove
+	 * @param int    $post_id
+	 * @param string $file_path
+	 *
+	 * @return array
+	 */
+	function local_files_to_remove( $files_to_remove, $post_id, $file_path ) {
+		if ( 'path/to/file.jpg' === $file_path ) {
+			$files_to_remove = array_diff( $files_to_remove, array( $file_path ) );
+		}
+
+		return $files_to_remove;
 	}
 
 	/**
@@ -360,6 +366,28 @@ class Amazon_S3_and_CloudFront_Tweaks {
 		 * on-demand actions as well.
 		 */
 		return 'delete_others_posts';
+	}
+
+	/**
+	 * This filter allows you to alter the local domains that can be filtered to S3 URLs.
+	 *
+	 * If you're dynamically altering the site's URL with something like the following...
+	 *
+	 * define( 'WP_SITEURL', 'http://' . $_SERVER['HTTP_HOST'] );
+	 * define( 'WP_HOME', 'http://' . $_SERVER['HTTP_HOST'] );
+	 *
+	 * ... then you'll need to append all known domains with this filter so that
+	 * any URLs inserted into content with an alternate domain are matched as local.
+	 *
+	 * @param array $domains
+	 *
+	 * @return array
+	 */
+	function local_domains( $domains ) {
+		$domains[] = 's3.localdev';
+		$domains[] = 'wpos3.localdev';
+
+		return $domains;
 	}
 
 	/**
@@ -437,21 +465,16 @@ class Amazon_S3_and_CloudFront_Tweaks {
 	}
 
 	/**
-	 * This filter allows you to control the files that are being removed from the server
-	 * after upload to S3.
+	 * By default HTTPS certificates are verified during Assets Pull's domain check,
+	 * you might want to turn that off for self-signed dev certificates.
 	 *
-	 * @param array  $files_to_remove
-	 * @param int    $post_id
-	 * @param string $file_path
+	 * @param bool   $verify
+	 * @param string $domain
 	 *
-	 * @return array
+	 * @return bool
 	 */
-	function local_files_to_remove( $files_to_remove, $post_id, $file_path ) {
-		if ( 'path/to/file.jpg' === $file_path ) {
-			$files_to_remove = array_diff( $files_to_remove, array( $file_path ) );
-		}
-
-		return $files_to_remove;
+	function assets_pull_test_endpoint_sslverify( $verify, $domain ) {
+		return false;
 	}
 }
 
